@@ -111,6 +111,7 @@ def draw_lattice(lattice):
         _draw_arrows(spin=spin, lattice=spin_lattice)
     pp.axis("scaled")
     pp.axis("off")
+    pp.show()
 
 
 if __name__ == "__main__":
@@ -121,4 +122,3 @@ if __name__ == "__main__":
         ]
     )
     draw_lattice(example_lattice_1)
-    pp.show()
