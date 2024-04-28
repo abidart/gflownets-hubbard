@@ -103,7 +103,7 @@ def _draw_arrows(spin, lattice):
 
 
 def draw_lattice(lattice):
-    check_valid_lattice(example_lattice_1)
+    check_valid_lattice(lattice=lattice)
     width, height = lattice.shape[1], lattice.shape[2]
     _base_lattice(lattice_width=width, lattice_height=height)
     for spin in [0, 1]:
