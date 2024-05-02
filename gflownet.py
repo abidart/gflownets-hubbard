@@ -342,5 +342,5 @@ if __name__ == "__main__":
     #     ]
     # )
     height, width = initial_state[0].shape
-    model = GFNAgent(height=height, width=width, epochs=501, index_log=100)
+    model = GFNAgent(height=height, width=width, epochs=51, index_log=10)
     model.train(initial_state=initial_state)

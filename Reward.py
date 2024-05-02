@@ -13,8 +13,8 @@ class Reward:
         self.temp = 270
         self.beta = 1 / (self.kb * self.temp)
 
-        self.U = 4
-        self.t = 2
+        self.U = 5
+        self.t = 1
 
         self.time_steps = 5.366e21
 
