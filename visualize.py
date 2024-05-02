@@ -1,8 +1,11 @@
 from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrow, Rectangle
-import matplotlib.pyplot as pp
+import matplotlib.pyplot as plt
 import numpy as np
-from checks import check_valid_lattice
+from checks import assert_rewardable_lattice, assert_drawable_lattice
+import imageio
+from PIL import Image
+import io
 
 x1 = 0.35
 x2 = 0.65
@@ -15,8 +18,8 @@ particle_separation = 0.3
 def _base_lattice(lattice_width, lattice_height):
     return tuple(
         [
-            pp.gca().add_patch(
-                pp.Circle(
+            plt.gca().add_patch(
+                plt.Circle(
                     (x * particle_separation, y * particle_separation),
                     0.05,
                     fc=(0.9, 0.9, 0.9),
@@ -27,7 +30,7 @@ def _base_lattice(lattice_width, lattice_height):
             for x in range(lattice_height)
         ]
         + [
-            pp.gca().add_line(
+            plt.gca().add_line(
                 Line2D(
                     [-line_pad, (lattice_height - 1) * particle_separation + line_pad],
                     [x * particle_separation, x * particle_separation],
@@ -38,7 +41,7 @@ def _base_lattice(lattice_width, lattice_height):
             for x in range(lattice_width)
         ]
         + [
-            pp.gca().add_line(
+            plt.gca().add_line(
                 Line2D(
                     [x * particle_separation, x * particle_separation],
                     [-line_pad, (lattice_width - 1) * particle_separation + line_pad],
@@ -50,7 +53,7 @@ def _base_lattice(lattice_width, lattice_height):
         ]
         + [
             # Add a square around the image
-            pp.gca().add_patch(
+            plt.gca().add_patch(
                 Rectangle(
                     (0 - line_pad, 0 - line_pad),
                     line_pad * 2 + (lattice_height - 1) * particle_separation,
@@ -71,7 +74,7 @@ def _draw_arrows(spin, lattice):
         for y in range(height):
             if lattice[x][y] == 1:
                 if spin == 0:
-                    pp.gca().add_patch(
+                    plt.gca().add_patch(
                         FancyArrow(
                             y * particle_separation,
                             (width - 1 - x) * particle_separation,
@@ -86,7 +89,7 @@ def _draw_arrows(spin, lattice):
                         )
                     )
                 else:  # spin equals 1
-                    pp.gca().add_patch(
+                    plt.gca().add_patch(
                         FancyArrow(
                             y * particle_separation,
                             (width - 1 - x) * particle_separation,
@@ -103,22 +106,53 @@ def _draw_arrows(spin, lattice):
 
 
 def draw_lattice(lattice):
-    check_valid_lattice(lattice=lattice)
+    assert_drawable_lattice(lattice)
     width, height = lattice.shape[1], lattice.shape[2]
     _base_lattice(lattice_width=width, lattice_height=height)
     for spin in [0, 1]:
         spin_lattice = lattice[spin]
         _draw_arrows(spin=spin, lattice=spin_lattice)
-    pp.axis("scaled")
-    pp.axis("off")
-    pp.show()
+    plt.axis("scaled")
+    plt.axis("off")
+    # plt.show()
+
+
+def visualize_trajectory(trajectory, filename="trajectory.gif", duration=10):
+    """
+    Create a GIF from a list of states using the `visualize_state` function.
+
+    Args:
+    states (list): A list of states to visualize.
+    filename (str): Name of the output GIF file.
+    duration (float): Duration of each frame in the GIF in seconds.
+    """
+    images = []
+
+    for state in trajectory:
+        # Visualize the state using your existing function
+        draw_lattice(state)
+
+        # Save the plot to a PNG buffer
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format="png", bbox_inches="tight")
+        buffer.seek(0)
+        image = Image.open(buffer)
+
+        # Convert the image to an array and add to the list
+        images.append(np.array(image))
+        plt.close()
+
+    # Save images as a GIF
+    imageio.mimsave(filename, images, fps=1)
 
 
 if __name__ == "__main__":
     example_lattice_1 = np.array(
         [
-            [[0, 1, 0, 1, 0], [1, 0, 1, 0, 1], [0, 0, 0, 0, 1]],
+            [[1, 0, 0, 1, 0], [1, 0, 1, 0, 1], [0, 0, 0, 0, 1]],
             [[1, 0, 1, 1, 1], [0, 0, 0, 0, 1], [0, 0, 1, 0, 0]],
         ]
     )
+    assert_rewardable_lattice(lattice=example_lattice_1)
     draw_lattice(example_lattice_1)
+    plt.show()
