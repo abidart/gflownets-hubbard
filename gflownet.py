@@ -264,12 +264,12 @@ class GFNAgent(Model):
                             filename=f"training_gifs/episode_{episode}.gif",
                         )
                     # TODO(Alan): fix reward
-                    # reward = self.env_reward.potential_reward(state)
-                    reward = (
-                        tf.convert_to_tensor([42], dtype=tf.float32)
-                        if state[0][0][0] == 1 and state[1][0][0] == 1
-                        else tf.convert_to_tensor([0], dtype=tf.float32)
-                    )
+                    reward = tf.cast(self.env_reward.potential_reward(state), dtype=tf.float32)
+                    # reward = (
+                    #     tf.convert_to_tensor([42], dtype=tf.float32)
+                    #     if state[0][0][0] == 1 and state[1][0][0] == 1
+                    #     else tf.convert_to_tensor([0], dtype=tf.float32)
+                    # )
                     break
 
                 new_state = self.apply_action(state=state, action=action_int)
@@ -308,6 +308,24 @@ class GFNAgent(Model):
         starting_state = tf.convert_to_tensor(state)
         batched_starting_state = tf.expand_dims(starting_state, axis=0)
         return batched_starting_state
+    
+    def generate_valid_state(self, height, width, num_e):
+
+        assert num_e <= width*height, "Number of elements (num_e) cannot exceed total number of cells (width * height)"
+
+        lattice = np.zeros((2, height, width))
+        random_up = np.random.choice(np.arange(height*width), size=num_e, replace=False)
+        random_down = np.random.choice(np.arange(height*width), size=num_e, replace=False)
+
+        for ind in random_up:
+            lattice[0, ind // width, ind % width] = 1
+
+        for ind in random_down:
+            lattice[1, ind // width, ind % width] = 1
+        
+        return lattice
+
+        
 
 
 if __name__ == "__main__":
