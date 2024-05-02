@@ -16,6 +16,7 @@ seaborn = "^0.13.2"
 tensorflow-probability = {extras = ["tf"], version = "^0.24.0"}
 imageio = "^2.34.1"
 pillow = "^10.3.0"
+tqdm = "^4.66.2"
 
 
 [tool.poetry.group.dev.dependencies]

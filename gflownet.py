@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from visualize import visualize_trajectory
+import tqdm
 
 import tensorflow as tf
 from tensorflow.keras.models import Model
@@ -24,10 +25,12 @@ class GFNAgent(Model):
 
     def __init__(
         self,
-        initial_state,
+        height,
+        width,
+        epochs,
+        index_log,
         n_hidden=32,
         name="",
-        epochs=100,
         lr=0.005,
         # not sure
         gamma=0.5,
@@ -48,9 +51,9 @@ class GFNAgent(Model):
         """
         super().__init__()
         # I understand
-        self.height, self.width = initial_state[0].shape
-        assert self.width > 2
-        assert self.height > 2
+        self.height, self.width = height, width
+        assert self.width > 1
+        assert self.height > 1
         self.name = name
         self.action_space = (
             2 * self.width * self.height * 4 + 1
@@ -69,7 +72,8 @@ class GFNAgent(Model):
         self.stop_action = self.action_space - 1
         self.data = {"positions": None, "actions": None, "rewards": None}
         self.get_model()
-        self.max_trajectory_len = 10  # 10?
+        self.max_trajectory_len = 10
+        self.index_log = index_log
 
         # I think I do
         # self.clear_eval_data()
@@ -106,14 +110,9 @@ class GFNAgent(Model):
             dense_2
         )
         # Z0 is a single learned value
-        self.z0 = tf.keras.Variable(0.0, name="z0")
+        self.logz = tf.keras.Variable(0.0, name="logz")
         # Model output will be a list of tensors for both forward and backward
         self.model = Model(input_, [fpm, bpm])
-        # # We'll be using the uniform distribution to add
-        # # more exploration to our forward policy
-        self.unif = tfd.Uniform(
-            low=[0] * self.action_space, high=[1] * self.action_space
-        )
 
     def call(self, state):
         return self.model(state)
@@ -144,23 +143,19 @@ class GFNAgent(Model):
 
                         # Set actions based on availability of target position
                         # Up
-                        actions[base_idx + 0] = 1 if lattice[spin, up, w] == 0 else 0
+                        if lattice[spin, up, w] == 0:
+                            actions[base_idx + 0] = 1
                         # Down
-                        actions[base_idx + 1] = 1 if lattice[spin, down, w] == 0 else 0
+                        if lattice[spin, down, w] == 0:
+                            actions[base_idx + 1] = 1
                         # Left
-                        actions[base_idx + 2] = 1 if lattice[spin, h, left] == 0 else 0
+                        if lattice[spin, h, left] == 0:
+                            actions[base_idx + 2] = 1
                         # Right
-                        actions[base_idx + 3] = 1 if lattice[spin, h, right] == 0 else 0
+                        if lattice[spin, h, right] == 0:
+                            actions[base_idx + 3] = 1
 
         return actions
-
-        ######
-        # batch_size = array_state.shape[0]
-        # # Check that we're not up against the edge of the environment
-        # action_mask = batch_of_positions < (self.env_len - 1)
-        # # The "stop" action is last and always allowed, so we append a 1 at the end)
-        # stop_column = np.ones((batch_size, 1))
-        # return np.append(action_mask, stop_column, axis=1)
 
     def mask_and_norm_forward_actions(self, lattice, batch_forward_probs):
         """Remove actions that would move outside the environment, and re-normalize
@@ -185,49 +180,149 @@ class GFNAgent(Model):
         direction = action % 4
         new_state[spin, height, width] = 0
         match direction:
+            # TODO(Alan): Remove assertions once bug in masking is fixed
             case 0:
+                assert new_state[spin, (height - 1) % self.height, width] == 0
                 new_state[spin, (height - 1) % self.height, width] = 1
             case 1:
+                assert new_state[spin, (height + 1) % self.height, width] == 0
                 new_state[spin, (height + 1) % self.height, width] = 1
             case 2:
+                assert new_state[spin, height, (width - 1) % self.width] == 0
                 new_state[spin, height, (width - 1) % self.width] = 1
             case 3:
+                assert new_state[spin, height, (width + 1) % self.width] == 0
                 new_state[spin, height, (width + 1) % self.width] = 1
         return new_state
+
+    def grad(self, total_P_F, total_P_B, reward):
+        """Calculate gradients based on loss function values. Notice the z0 value is
+        also considered during training.
+        :param batch: (tuple of ndarrays) Output from self.train_gen() (positions, rewards)
+        :return: (tuple) (loss, gradients)
+        """
+        with tf.GradientTape() as tape:
+            loss = self.trajectory_balance_loss(
+                total_P_F=total_P_F, total_P_B=total_P_B, reward=reward
+            )
+            grads = tape.gradient(loss, self.trainable_variables + [self.logz])
+        return loss, grads
+
+    def trajectory_balance_loss(self, total_P_F, total_P_B, reward):
+        return tf.pow(
+            self.logz
+            + total_P_F
+            - tf.clip_by_value(tf.math.log(reward), -20, tf.float32.max)
+            - total_P_B,
+            2,
+        )
+
+    def train(self, initial_state):
+        """Run a training loop of `length self.epochs`.
+        At the end of each epoch, save weights if loss is better than any previous epoch.
+        At the end of training, read in the best weights.
+        :param verbose: (bool) Print additional messages while training
+        :return: (None) Updated model parameters
+        """
+        for episode in tqdm.tqdm(range(self.epochs), ncols=40):
+            # Each episode starts with an "initial state"
+            trajectory = []
+            path = []
+
+            if episode % self.index_log == 0:
+                trajectory.append(initial_state)
+
+            state = initial_state
+            state_tensor = self.state_to_tensor(initial_state)
+            # Predict P_F, P_B
+            P_F_logit, P_B_logit = self.model(state_tensor)
+            P_F_probs, P_B_probs = tf.exp(P_F_logit), tf.exp(P_B_logit)
+            total_P_F = 0
+            total_P_B = 0
+            reward = 0
+
+            for trajectory_len in range(self.max_trajectory_len):
+                # TODO(Alan): understand if we should use logits or probabilities
+                # Here P_F is logits, so we want the Categorical to compute the softmax for us
+                normalized_actions_probs = self.mask_and_norm_forward_actions(
+                    lattice=state, batch_forward_probs=P_F_probs
+                )
+                cat = tfd.Categorical(probs=normalized_actions_probs)
+                action = cat.sample()
+
+                action_one_hot = tf.one_hot(action, self.action_space).numpy()
+                action_int = np.argmax(action_one_hot)
+                if episode % self.index_log == 0:
+                    path.append(action_one_hot)
+
+                if action_int == self.stop_action or trajectory_len == (
+                    self.max_trajectory_len - 1
+                ):
+                    if episode % self.index_log == 0:
+                        visualize_trajectory(
+                            trajectory=trajectory,
+                            filename=f"training_gifs/episode_{episode}.gif",
+                        )
+                    # TODO(Alan): fix reward
+                    # reward = self.env_reward.potential_reward(state)
+                    reward = (
+                        tf.convert_to_tensor([42], dtype=tf.float32)
+                        if state[0][0][0] == 1 and state[1][0][0] == 1
+                        else tf.convert_to_tensor([0], dtype=tf.float32)
+                    )
+                    break
+
+                new_state = self.apply_action(state=state, action=action_int)
+
+                if episode % self.index_log == 0:
+                    trajectory.append(new_state)
+
+                new_state_tensor = self.state_to_tensor(new_state)
+                # Accumulate the P_F sum
+                total_P_F += cat.log_prob(action)
+
+                # We recompute P_F and P_B for new_state
+                P_F_logit, P_B_logit = self.model(new_state_tensor)
+                P_F_probs, P_B_probs = tf.exp(P_F_logit), tf.exp(P_B_logit)
+                # Here we accumulate P_B, going backwards from `new_state`. We're also just
+                # going to use opposite semantics for the backward policy. I.e., for P_F action
+                # `i` just added the face part `i`, for P_B we'll assume action `i` removes
+                # face part `i`, this way we can just keep the same indices.
+                total_P_B += tfd.Categorical(probs=P_B_probs).log_prob(action)
+
+                # Continue iterating
+                state = new_state
+
+            # We're done with the trajectory, let's compute its loss. Since the reward can
+            # sometimes be zero, instead of log(0) we'll clip the log-reward to -20.
+            loss, grads = self.grad(total_P_F, total_P_B, reward)
+            self.optimizer.apply_gradients(
+                zip(grads, self.trainable_variables + [self.logz])
+            )
+            if episode % self.index_log == 0:
+                print(
+                    f"\nEpisode {episode}, loss = {loss.numpy()}, logZ ={self.logz.numpy()}"
+                )
+
+    def state_to_tensor(self, state):
+        starting_state = tf.convert_to_tensor(state)
+        batched_starting_state = tf.expand_dims(starting_state, axis=0)
+        return batched_starting_state
 
 
 if __name__ == "__main__":
     initial_state = np.array(
         [
-            [[0, 1, 0, 1, 0], [1, 0, 1, 0, 1], [0, 0, 0, 0, 1]],
-            [[1, 0, 1, 1, 1], [0, 0, 0, 0, 1], [0, 0, 1, 0, 0]],
+            [[0, 0, 1, 1, 0], [0, 1, 1, 0, 1], [0, 0, 0, 0, 1]],
+            [[0, 0, 1, 1, 1], [0, 0, 1, 0, 1], [0, 0, 1, 0, 0]],
         ]
     )
-    trajectory = [initial_state]
-    path = []
-    model = GFNAgent(initial_state=initial_state)
-    state = initial_state
-
-    for episode in range(model.max_trajectory_len):
-        starting_state = tf.convert_to_tensor(state)
-        batched_starting_state = tf.expand_dims(starting_state, axis=0)
-        # tensor_starting_state = tf.reshape(tensor_starting_state, shape=(1, 2, 3, 5))
-        model_forward_logits = model(batched_starting_state)[0]
-        model_forward_probs = tf.math.exp(model_forward_logits)
-        normalized_actions = model.mask_and_norm_forward_actions(
-            lattice=state, batch_forward_probs=model_forward_probs
-        )
-        action = tfd.Categorical(probs=normalized_actions).sample()
-        action_one_hot = tf.one_hot(action, model.action_space).numpy()
-        action_int = np.argmax(action_one_hot)
-        path.append(action_one_hot)
-
-        if action_int == model.stop_action or episode == (model.max_trajectory_len - 1):
-            visualize_trajectory(trajectory=trajectory)
-            # reward = model.env_reward.potential_reward(state)
-            break
-
-        state = model.apply_action(state=state, action=action_int)
-        trajectory.append(state)
-
-    # print(f"{reward=} after {len(path)} actions")
+    # initial_state = np.array(
+    #     [
+    #         [[1, 0], [1, 1]],
+    #         [[1, 1], [1, 0]],
+    #     ]
+    # )
+    height, width = initial_state[0].shape
+    model = GFNAgent(height=height, width=width, epochs=501, index_log=100)
+    model.train(initial_state=initial_state)
