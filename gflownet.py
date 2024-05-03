@@ -228,6 +228,8 @@ class GFNAgent(Model):
             # Each episode starts with an "initial state"
             trajectory = []
             path = []
+            batch_loss = 0
+            grad_accumulators = [tf.zeros_like(var) for var in self.trainable_variables + [self.logz]]
 
             if episode % self.index_log == 0:
                 trajectory.append(initial_state)
@@ -264,12 +266,12 @@ class GFNAgent(Model):
                             filename=f"training_gifs/episode_{episode}.gif",
                         )
                     # TODO(Alan): fix reward
-                    # reward = self.env_reward.potential_reward(state)
-                    reward = (
-                        tf.convert_to_tensor([42], dtype=tf.float32)
-                        if state[0][0][0] == 1 and state[1][0][0] == 1
-                        else tf.convert_to_tensor([0], dtype=tf.float32)
-                    )
+                    reward = tf.cast(self.env_reward.potential_reward(state), dtype=tf.float32)
+                    # reward = (
+                    #     tf.convert_to_tensor([42], dtype=tf.float32)
+                    #     if state[0][0][0] == 1 and state[1][0][0] == 1
+                    #     else tf.convert_to_tensor([0], dtype=tf.float32)
+                    # )
                     break
 
                 new_state = self.apply_action(state=state, action=action_int)
@@ -296,9 +298,23 @@ class GFNAgent(Model):
             # We're done with the trajectory, let's compute its loss. Since the reward can
             # sometimes be zero, instead of log(0) we'll clip the log-reward to -20.
             loss, grads = self.grad(total_P_F, total_P_B, reward)
-            self.optimizer.apply_gradients(
-                zip(grads, self.trainable_variables + [self.logz])
-            )
+            print(grads)
+            batch_loss += loss
+
+            for i, grad in enumerate(grads):
+                if grad is not None:
+                    grad_accumulators[i] += grad
+                else:
+                    # print(f"Gradient for variable {self.trainable_variables[i].name} was None. This is an issue.")  
+                    break              
+          
+            # 50 is batch size, can make parameter later
+            if (episode + 1) % 50 == 0:
+                self.optimizer.apply_gradients(zip(grad_accumulators, self.trainable_variables + [self.logz]))
+                print(f"Batch end at episode {episode + 1}, Average Loss: {batch_loss / 50:.4f}")
+                batch_loss = 0
+                grad_accumulators = [tf.zeros_like(var) for var in self.trainable_variables + [self.logz]]
+
             if episode % self.index_log == 0:
                 print(
                     f"\nEpisode {episode}, loss = {loss.numpy()}, logZ ={self.logz.numpy()}"
