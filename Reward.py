@@ -55,8 +55,8 @@ class Reward:
 
         for i in range(self.w):
             for j in range(self.h):
-                n_down = state[0, i, j]
-                n_up = state[1, i, j]
+                n_down = state[0, j, i]
+                n_up = state[1, j, i]
 
                 product = np.exp(-self.d_tau * self.U * (n_up + n_down) / 2)
 
