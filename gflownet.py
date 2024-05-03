@@ -217,113 +217,179 @@ class GFNAgent(Model):
             2,
         )
 
-    def train(self, initial_state):
+    def train(self, initial_states):
         """Run a training loop of `length self.epochs`.
         At the end of each epoch, save weights if loss is better than any previous epoch.
         At the end of training, read in the best weights.
         :param verbose: (bool) Print additional messages while training
         :return: (None) Updated model parameters
         """
-        for episode in tqdm.tqdm(range(self.epochs), ncols=40):
-            # Each episode starts with an "initial state"
+
+        # use datasets to set up batches using array of initial states (check out generate_valid_states)
+        dataset = tf.data.Dataset.from_tensor_slices(initial_states)
+        dataset = dataset.shuffle(buffer_size=100).batch(5) # can change batch size here
+
+        # uses epochs instead of episodes, maybe we could stick with episodes since reinforcement learning
+        for epoch in range(self.epochs):
+            print(f"Epoch {epoch + 1}/{self.epochs}")
+            epoch_losses = []
             trajectory = []
-            path = []
 
-            if episode % self.index_log == 0:
-                trajectory.append(initial_state)
+            # gradient tape, loss, and optimization for each batch
+            for batch_initial_states in dataset:
+                with tf.GradientTape() as tape:
+                    losses = []
+                    for initial_state in batch_initial_states:
 
-            state = initial_state
-            state_tensor = self.state_to_tensor(initial_state)
-            # Predict P_F, P_B
-            P_F_logit, P_B_logit = self.model(state_tensor)
-            P_F_probs, P_B_probs = tf.exp(P_F_logit), tf.exp(P_B_logit)
-            total_P_F = 0
-            total_P_B = 0
-            reward = 0
+        # ALL FOLLOWING LOGIC SWALLOWED INTO BATCH IMPLEMENTATION
+        # for episode in tqdm.tqdm(range(self.epochs), ncols=40):
+        #     # Each episode starts with an "initial state"
+        #     trajectory = [] // moved trajectory up for each epoch
+        #     path = [] // got rid of path, cat.sample() does same thing
 
-            for trajectory_len in range(self.max_trajectory_len):
+        #     if episode % self.index_log == 0:
+        #         trajectory.append(initial_state)
+
+                        state = initial_state
+                        state_tensor = self.state_to_tensor(initial_state)
+                        # Predict P_F, P_B
+                        P_F_logit, P_B_logit = self.model(state_tensor)
+                        P_F_probs, P_B_probs = tf.exp(P_F_logit), tf.exp(P_B_logit)
+                        total_P_F = 0
+                        total_P_B = 0
+                        # reward = 0 // goes after next for loop
+
+                        for trajectory_len in range(self.max_trajectory_len):
                 # TODO(Alan): understand if we should use logits or probabilities
                 # Here P_F is logits, so we want the Categorical to compute the softmax for us
-                normalized_actions_probs = self.mask_and_norm_forward_actions(
-                    lattice=state, batch_forward_probs=P_F_probs
-                )
-                cat = tfd.Categorical(probs=normalized_actions_probs)
-                action = cat.sample()
+                            normalized_actions_probs = self.mask_and_norm_forward_actions(
+                                lattice=state, batch_forward_probs=P_F_probs
+                            )
+                            cat = tfd.Categorical(probs=normalized_actions_probs)
+                            action = cat.sample()
 
-                action_one_hot = tf.one_hot(action, self.action_space).numpy()
-                action_int = np.argmax(action_one_hot)
-                if episode % self.index_log == 0:
-                    path.append(action_one_hot)
+                            log_prob_f = cat.log_prob(action)
+                            total_P_F += log_prob_f
 
-                if action_int == self.stop_action or trajectory_len == (
-                    self.max_trajectory_len - 1
-                ):
-                    if episode % self.index_log == 0:
-                        visualize_trajectory(
-                            trajectory=trajectory,
-                            filename=f"training_gifs/episode_{episode}.gif",
-                        )
+                            trajectory.append(state)
+                        
+                            action_one_hot = tf.one_hot(action, self.action_space).numpy()
+                            action_int = np.argmax(action_one_hot)
+
+
+                            if action_int == self.stop_action or trajectory_len == (
+                                self.max_trajectory_len - 1
+                            ):
+                                if epoch % self.index_log == 0:
+                                    visualize_trajectory(
+                                        trajectory=trajectory,
+                                        filename=f"training_gifs/episode_{epoch}.gif",
+                                    )
+
+                            new_state = self.apply_action(state=state, action=action_int) # error often happens here because action chosen was invalid
+                            P_F_logit, P_B_logit = self.model(self.state_to_tensor(new_state))
+                            log_prob_b = tfd.Categorical(probs=tf.exp(P_B_logit)).log_prob(action) # error often happens here because action 120 is outside of range [1,120)
+                            total_P_B += log_prob_b
+
+                            state = new_state
+
+                        reward = tf.cast(self.env_reward.potential_reward(state), dtype=tf.float32)
+                        loss = self.trajectory_balance_loss(total_P_F, total_P_B, reward)
+                        losses.append(loss)
+
+                    batch_loss = tf.reduce_mean(losses)
+                    grads = tape.gradient(batch_loss, self.trainable_variables + [self.logz])
+                    self.optimizer.apply_gradients(zip(grads, self.trainable_variables + [self.logz]))
+
+                epoch_losses.append(batch_loss.numpy())
+
+            avg_loss = sum(epoch_losses) / len(epoch_losses)
+            print(f"Average Loss for Epoch {epoch + 1}: {avg_loss}")
+
+            ### end of batch training implementation ###
+
+            
+
+                # action_one_hot = tf.one_hot(action, self.action_space).numpy()
+                # action_int = np.argmax(action_one_hot)
+                # if episode % self.index_log == 0:
+                #     path.append(action_one_hot)
+
+                # if action_int == self.stop_action or trajectory_len == (
+                #     self.max_trajectory_len - 1
+                # ):
+                #     if episode % self.index_log == 0:
+                #         visualize_trajectory(
+                #             trajectory=trajectory,
+                #             filename=f"training_gifs/episode_{episode}.gif",
+                #         )
                     # TODO(Alan): fix reward
-                    reward = tf.cast(self.env_reward.potential_reward(state), dtype=tf.float32)
-                    # reward = (
-                    #     tf.convert_to_tensor([42], dtype=tf.float32)
-                    #     if state[0][0][0] == 1 and state[1][0][0] == 1
-                    #     else tf.convert_to_tensor([0], dtype=tf.float32)
-                    # )
-                    break
+                    # reward = tf.cast(self.env_reward.potential_reward(state), dtype=tf.float32)
+                    # # reward = (
+                    # #     tf.convert_to_tensor([42], dtype=tf.float32)
+                    # #     if state[0][0][0] == 1 and state[1][0][0] == 1
+                    # #     else tf.convert_to_tensor([0], dtype=tf.float32)
+                    # # )
+                    # break
 
-                new_state = self.apply_action(state=state, action=action_int)
+                # new_state = self.apply_action(state=state, action=action_int)
 
-                if episode % self.index_log == 0:
-                    trajectory.append(new_state)
+                # if episode % self.index_log == 0:
+                #     trajectory.append(new_state)
 
-                new_state_tensor = self.state_to_tensor(new_state)
-                # Accumulate the P_F sum
-                total_P_F += cat.log_prob(action)
+                # new_state_tensor = self.state_to_tensor(new_state)
+                # # Accumulate the P_F sum
+                # total_P_F += cat.log_prob(action)
 
                 # We recompute P_F and P_B for new_state
-                P_F_logit, P_B_logit = self.model(new_state_tensor)
-                P_F_probs, P_B_probs = tf.exp(P_F_logit), tf.exp(P_B_logit)
+                # P_F_logit, P_B_logit = self.model(new_state_tensor)
+                # P_F_probs, P_B_probs = tf.exp(P_F_logit), tf.exp(P_B_logit)
                 # Here we accumulate P_B, going backwards from `new_state`. We're also just
                 # going to use opposite semantics for the backward policy. I.e., for P_F action
                 # `i` just added the face part `i`, for P_B we'll assume action `i` removes
                 # face part `i`, this way we can just keep the same indices.
-                total_P_B += tfd.Categorical(probs=P_B_probs).log_prob(action)
+
+                # total_P_B += tfd.Categorical(probs=P_B_probs).log_prob(action)
 
                 # Continue iterating
-                state = new_state
+                # state = new_state
 
             # We're done with the trajectory, let's compute its loss. Since the reward can
             # sometimes be zero, instead of log(0) we'll clip the log-reward to -20.
-            loss, grads = self.grad(total_P_F, total_P_B, reward)
-            self.optimizer.apply_gradients(
-                zip(grads, self.trainable_variables + [self.logz])
-            )
-            if episode % self.index_log == 0:
-                print(
-                    f"\nEpisode {episode}, loss = {loss.numpy()}, logZ ={self.logz.numpy()}"
-                )
+            # loss, grads = self.grad(total_P_F, total_P_B, reward)
+            # self.optimizer.apply_gradients(
+            #     zip(grads, self.trainable_variables + [self.logz])
+            # )
+            # if episode % self.index_log == 0:
+            #     print(
+            #         f"\nEpisode {episode}, loss = {loss.numpy()}, logZ ={self.logz.numpy()}"
+            #     )
 
     def state_to_tensor(self, state):
         starting_state = tf.convert_to_tensor(state)
         batched_starting_state = tf.expand_dims(starting_state, axis=0)
         return batched_starting_state
     
-    def generate_valid_state(self, height, width, num_e):
+    def generate_valid_states(self, height, width, num_e, num_states):
 
         assert num_e <= width*height, "Number of elements (num_e) cannot exceed total number of cells (width * height)"
 
-        lattice = np.zeros((2, height, width))
-        random_up = np.random.choice(np.arange(height*width), size=num_e, replace=False)
-        random_down = np.random.choice(np.arange(height*width), size=num_e, replace=False)
+        states = np.zeros((num_states, 2, height, width))
 
-        for ind in random_up:
-            lattice[0, ind // width, ind % width] = 1
-
-        for ind in random_down:
-            lattice[1, ind // width, ind % width] = 1
+        for i in range(num_states):
+            lattice = np.zeros((2, height, width))
+            random_up = np.random.choice(height * width, size=num_e, replace=False)
+            random_down = np.random.choice(height * width, size=num_e, replace=False)
         
-        return lattice
+            for ind in random_up:
+                lattice[0, ind // width, ind % width] = 1
+
+            for ind in random_down:
+                lattice[1, ind // width, ind % width] = 1
+
+            states[i]=lattice
+        
+        return states
 
         
 
@@ -343,4 +409,5 @@ if __name__ == "__main__":
     # )
     height, width = initial_state[0].shape
     model = GFNAgent(height=height, width=width, epochs=51, index_log=10)
-    model.train(initial_state=initial_state)
+    initial_states = model.generate_valid_states(height=model.height, width=model.width, num_e=7, num_states=10)
+    model.train(initial_states=initial_states)
