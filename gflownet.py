@@ -298,7 +298,6 @@ class GFNAgent(Model):
             # We're done with the trajectory, let's compute its loss. Since the reward can
             # sometimes be zero, instead of log(0) we'll clip the log-reward to -20.
             loss, grads = self.grad(total_P_F, total_P_B, reward)
-            print(grads)
             batch_loss += loss
 
             for i, grad in enumerate(grads):
