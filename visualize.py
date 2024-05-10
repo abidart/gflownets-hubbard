@@ -105,32 +105,40 @@ def _draw_arrows(spin, lattice):
                     )
 
 
-def draw_lattice(lattice):
+def draw_lattice(lattice, reward=None):
     assert_drawable_lattice(lattice)
     width, height = lattice.shape[1], lattice.shape[2]
     _base_lattice(lattice_width=width, lattice_height=height)
     for spin in [0, 1]:
         spin_lattice = lattice[spin]
         _draw_arrows(spin=spin, lattice=spin_lattice)
+    if reward is not None:
+        plt.title(f"{reward=}")
     plt.axis("scaled")
     plt.axis("off")
     # plt.show()
 
 
-def visualize_trajectory(trajectory, filename="trajectory.gif", duration=10):
+def visualize_trajectory(
+    trajectory, filename="trajectory.gif", reward=None, duration=10
+):
     """
     Create a GIF from a list of states using the `visualize_state` function.
-
-    Args:
     states (list): A list of states to visualize.
     filename (str): Name of the output GIF file.
     duration (float): Duration of each frame in the GIF in seconds.
     """
     images = []
+    last_index = len(trajectory) - 1
 
-    for state in trajectory:
+    for index, state in enumerate(trajectory):
         # Visualize the state using your existing function
-        draw_lattice(state)
+        if index == last_index:
+            draw_lattice(state, reward=reward)
+        elif index == 0:
+            draw_lattice(state, reward="starting")
+        else:
+            draw_lattice(state, reward="intermediate")
 
         # Save the plot to a PNG buffer
         buffer = io.BytesIO()
