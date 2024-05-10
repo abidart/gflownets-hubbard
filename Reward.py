@@ -13,30 +13,25 @@ class Reward:
         self.temp = 270
         self.beta = 1 / (self.kb * self.temp)
 
-        self.U = 4
+        self.U = 8
         self.t = 2
 
         self.time_steps = 5.366e21
 
-        self.d_tau = self.beta / self.time_steps
-
+        self.d_tau = 0.1
+        self.gamma = 1
         # gamma is a complex value, so used optimizer given other inputs
 
-    # def update_state(self, new_state):
-    #     self.state = new_state
-    #     self.w = self.state.shape[1]
-    #     self.h = self.state.shape[2]
-
-    def get_gamma(self):
-        def equation(gamma):
-            return np.tanh(gamma) ** 2 - np.tanh(self.d_tau * self.U / 4)
-
-        gamma_guess = 0.5
-        (gamma_solution,) = fsolve(equation, gamma_guess)
-
-        print(gamma_solution)
-
-        return gamma_solution
+    # def get_gamma(self):
+    #     def equation(gamma):
+    #         return np.tanh(gamma) ** 2 - np.tanh(self.d_tau * self.U / 4)
+    #
+    #     gamma_guess = 0.5
+    #     (gamma_solution,) = fsolve(equation, gamma_guess)
+    #
+    #     # print(gamma_solution)
+    #
+    #     return gamma_solution
 
     def potential_reward(self, state):
         """
@@ -51,7 +46,7 @@ class Reward:
         """
         all_site_product = 1
 
-        gamma = self.get_gamma()
+        gamma = self.gamma
 
         for i in range(self.w):
             for j in range(self.h):
@@ -82,7 +77,7 @@ if __name__ == "__main__":
         ]
     )
 
-    calculator = Reward(init_state=example1)
+    # calculator = Reward(init_state=example1)
 
     # print("If all sites are doubly occupied: " + str(calculator.potential_reward()))
 
@@ -100,8 +95,13 @@ if __name__ == "__main__":
         ]
     )
 
-    calculator.update_state(example3)
-    calculator.potential_reward()
+    # calculator.update_state(example3)
+    # calculator.potential_reward()
+    reward_test = np.array([[[1, 1], [0, 1]], [[1, 1], [0, 1]]])
+
+    env_reward = Reward(2, 2)
+    value = env_reward.potential_reward(reward_test)
+    print("value")
 
     # print("If all sites have down electrons: " + str(calculator.potential_reward()))
 
